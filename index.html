@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>FORPHOR 库存</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside id="side">
+  <div class="mark"><img src="assets/logo-en.svg" alt="FORPHOR"><span>福图 · 库存</span></div>
+  <nav id="nav"></nav>
+  <div class="foot">
+    <label>记录人 <select id="user"></select></label>
+    <p id="saved"></p>
+  </div>
+</aside>
+<main>
+  <header id="bar"><h1 id="title"></h1><button class="primary" data-act="record">记一笔</button></header>
+  <section id="view"></section>
+</main>
+<dialog id="dlg"></dialog>
+<script src="assets/xlsx.mini.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
