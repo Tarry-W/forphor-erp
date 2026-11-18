@@ -2,7 +2,7 @@
    数据结构：products 产品 / channels 渠道 / tx 流水。库存全部由流水计算。 */
 (() => {
 'use strict';
-const APP_VERSION = '2026-11-18';
+const APP_VERSION = '2026-11-18b';
 const KEY = 'forphor-erp-v2', UKEY = 'forphor-erp-user';
 const USERS = ['Long', 'Burke'];
 // need: 该类型需要哪一类渠道；null = 不需要渠道
@@ -16,8 +16,8 @@ const TYPES = {
   ret:    { l: '退货',     need: null,      hint: '本仓 +' },
   adj:    { l: '调整',     need: null,      hint: '盘点差异，可填负数' },
 };
-const CH_TYPES = { sale: '直营', drop: '代发', gift: '赠送', consign: '寄售' };
-const fits = (c, need) => c.type === need || (need === 'sale' && c.type === 'drop');
+const CH_TYPES = { sale: '直营', whole: '订货', drop: '代发', gift: '赠送', consign: '寄售' };
+const fits = (c, need) => c.type === need || (need === 'sale' && (c.type === 'drop' || c.type === 'whole'));
 const EYE = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_OFF = EYE.replace('</svg>', '<path d="M4 4l16 16"/></svg>');
 const VIEWS = [['stock', '库存'], ['ledger', '流水'], ['settle', '对账'], ['products', '产品'], ['channels', '渠道'], ['settings', '设置']];
@@ -120,7 +120,7 @@ const Cloud = {
 };
 let S = Store.load();
 let user = (() => { try { return localStorage.getItem(UKEY); } catch (e) { return null; } })() || USERS[0];
-const ui = { q: '', act: null, show: 'all', cat: '', gen: null, smode: 'sold', simp: null, sopen: {}, scal: false, scalAdd: [], open: {}, closed: {}, lq: '', lt: '', lc: '', lh: false, lmax: 200, pq: '', pf: '', sch: '' };
+const ui = { cclosed: {}, q: '', act: null, show: 'all', cat: '', gen: null, smode: 'sold', simp: null, sopen: {}, scal: false, scalAdd: [], open: {}, closed: {}, lq: '', lt: '', lc: '', lh: false, lmax: 200, pq: '', pf: '', sch: '' };
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -220,7 +220,7 @@ function moveChannel(id, targetId, after) {
 // 改渠道类型时，把这个渠道以前的流水一起换成新口径，数量不丢
 function retypeChannel(c, type) {
   if (c.type === type) return;
-  const out = { sale: 'sale', drop: 'sale', gift: 'gift', consign: 'c_out' }[type], keep = [];
+  const out = { sale: 'sale', whole: 'sale', drop: 'sale', gift: 'gift', consign: 'c_out' }[type], keep = [];
   for (const t of S.tx) {
     if (t.ch !== c.id) { keep.push(t); continue; }
     if (['sale', 'gift', 'c_out'].includes(t.type)) { t.type = out; keep.push(t); }
@@ -231,19 +231,19 @@ function retypeChannel(c, type) {
   }
   S.tx = keep; c.type = type; save();
 }
-function addProduct(name, series) {
+function addProduct(name, series, cat) {
   name = String(name || '').trim(); if (!name) return null;
-  const sib = S.products.find(x => x.series === (series || '未分类'));
-  const p = { id: 'p' + uid(), series: series || '未分类', cat: sib ? sib.cat : (ui.cat || ''), name, en: '', sku: '', barcode: '', cost: null, price: null, note: '', active: true };
+  const sib = S.products.find(x => x.series === (series || '未分类') && (cat == null || (x.cat || '') === cat));
+  const p = { id: 'p' + uid(), series: series || '未分类', cat: cat != null ? cat : sib ? sib.cat : (ui.cat || ''), name, en: '', sku: '', barcode: '', cost: null, price: null, note: '', active: true };
   let at = -1; S.products.forEach((x, i) => { if (x.series === p.series) at = i; });
   if (at < 0) S.products.push(p); else S.products.splice(at + 1, 0, p);
   save(); return p;
 }
 
 /* ---------- 库存（可直接改数字的表格） ---------- */
-const GSHORT = { sale: '直营', drop: '代发', gift: '赠送', consign: '寄售' };
-const GROUPS0 = 0, GROUPS = [['sale', '直营'], ['drop', '代发（有订单才发，发出即售出）'], ['gift', '赠送'], ['consign', '寄售（现在还在店里的数量，仍属于我们）']];
-function viewState() { S.view = S.view || {}; S.view.hideSeries = S.view.hideSeries || []; S.view.order = (S.view.order || []).filter(t => GSHORT[t]); for (const [t] of GROUPS) if (!S.view.order.includes(t)) S.view.order.push(t); S.view.fold = S.view.fold || {}; return S.view; }
+const GSHORT = { sale: '直营', whole: '订货', drop: '代发', gift: '赠送', consign: '寄售' };
+const GROUPS0 = 0, GROUPS = [['sale', '直营'], ['whole', '订货（对方直接买货，发出即卖出）'], ['drop', '代发（有订单才发，发出即售出）'], ['gift', '赠送'], ['consign', '寄售（现在还在店里的数量，仍属于我们）']];
+function viewState() { S.view = S.view || {}; S.view.hideSeries = S.view.hideSeries || []; S.view.hideCat = S.view.hideCat || []; S.view.catOrder = S.view.catOrder || [...CATS4, '']; S.view.order = (S.view.order || []).filter(t => GSHORT[t]); for (const [t] of GROUPS) if (!S.view.order.includes(t)) { const i = t === 'whole' ? S.view.order.indexOf('sale') : -1; if (i >= 0) S.view.order.splice(i + 1, 0, t); else S.view.order.push(t); } S.view.fold = S.view.fold || {}; return S.view; }
 function gridCols() {
   const hidden = ui.show === 'hidden', v = viewState();
   return v.order.map(t => ({ t, l: GROUPS.find(g => g[0] === t)[1], fold: !!v.fold[t], chs: S.channels.filter(c => c.type === t && (c.active !== false) !== hidden) }));
@@ -259,7 +259,7 @@ function applyDelta(pid, k, d) {
   let type, ch = null;
   if (k === 'in') type = 'in'; else if (k === 'ret') type = 'ret'; else if (k === 'wh') type = 'adj';
   else if (k.startsWith('rt:')) { ch = k.slice(3); type = 'ret'; }
-  else { ch = k.slice(3); type = { sale: 'sale', drop: 'sale', gift: 'gift', consign: 'c_out' }[C(ch).type]; }
+  else { ch = k.slice(3); type = { sale: 'sale', whole: 'sale', drop: 'sale', gift: 'gift', consign: 'c_out' }[C(ch).type]; }
   const date = today();
   const t = S.tx.find(x => x.auto && x.pid === pid && x.type === type && x.ch === ch && x.date === date && x.by === user);
   if (t) { t.qty += d; if (!t.qty) S.tx = S.tx.filter(x => x !== t); }
@@ -283,6 +283,16 @@ function calSelect(diff) {   // diff < 0 店里少了，> 0 店里多了，0 还
   const opts = Object.entries(CAL_HOW).filter(([, h]) => !diff || Math.sign(diff) === h.dir).map(([k, h]) => `<option value="${k}" data-dir="${h.dir}">${h.l}（${h.fx}）</option>`).join('');
   return `<select class="calsel" ${diff ? '' : 'disabled'}><option value="">${diff ? '选去向…' : '—'}</option>${opts}</select>`;
 }
+function openVis() {   // 显示设置：分类 → 品类 → 产品，勾选 = 在库存页显示
+  const vs = viewState(), hc = new Set(vs.hideCat), hs = new Set(vs.hideSeries), catOf = p => p.cat || '';
+  const cats = [...vs.catOrder.filter(c => S.products.some(p => catOf(p) === c)), ...new Set(S.products.map(catOf).filter(c => !vs.catOrder.includes(c)))];
+  const tree = cats.map(cat => {
+    const cps = S.products.filter(p => catOf(p) === cat), sers = groups(cps);
+    return `<details open class="vc"><summary><label><input type="checkbox" data-vis="c:${esc(cat)}" ${hc.has(cat) ? '' : 'checked'}> <b>${esc(cat || '未分类')}</b></label> <span class="hint">${sers.size} 个品类</span></summary><div class="vkids">${[...sers].map(([se, ps]) => `<details class="vs"><summary><label><input type="checkbox" data-vis="s:${esc(se)}" ${hs.has(se) ? '' : 'checked'}> ${esc(se)}</label> <span class="hint">${ps.length} 款</span></summary><div class="vkids vleaf">${ps.map(p => `<label class="vp" style="${swatch(p)}"><input type="checkbox" data-vis="p:${p.id}" ${p.active === false ? '' : 'checked'}> ${esc(p.name)}</label>`).join('')}</div></details>`).join('')}</div></details>`;
+  }).join('');
+  $('#dlg').innerHTML = `<h2>显示设置</h2><p class="hint">勾选的才在库存页显示；取消勾选 = 隐藏，数量都保留。上一级取消勾选时，下面的会一起隐藏。点品类名字左边的小三角可以展开到每个颜色。</p><div class="vtree">${tree}</div><div class="tools"><button class="primary" data-act="close">完成</button></div>`;
+  $('#dlg').showModal();
+}
 function histTotal(id) {   // 对账记录最下面的合计：累计卖出件数、累计结算金额
   const rs = S.settles.filter(x => x.ch === id && !x.kind); if (!rs.length) return '';
   const n = rs.reduce((a, x) => a + x.lines.reduce((b, l) => b + (l.qty || 0), 0), 0), amt = Math.round(rs.reduce((a, x) => a + x.lines.reduce((b, l) => b + (l.price != null ? l.qty * l.price : 0), 0), 0) * 100) / 100;
@@ -300,64 +310,73 @@ function vStock() {
     for (const c of g.chs) { cols.push({ k: 'ch:' + c.id, c, g }); if (c.type === 'drop') cols.push({ k: 'rt:' + c.id, c, g, sub: '退回' }); }
     if (g.t === 'sale' && !hidden) cols.push({ k: 'ret', g, sub: '退货' });
   }
-  const hs = new Set(viewState().hideSeries), isHid = p => p.active === false || hs.has(p.series);
+  const vs = viewState(), hs = new Set(vs.hideSeries), hc = new Set(vs.hideCat), catOf = p => p.cat || '';
+  const isHid = p => p.active === false || hs.has(p.series) || hc.has(catOf(p));
   const list = S.products.filter(p => (hidden ? isHid(p) : !isHid(p)) && (!ui.cat || p.cat === ui.cat) && match(p, ui.q) && !(ui.show === 'stock' && m[p.id].wh === 0 && m[p.id].out === 0));
   let wh = 0, out = 0, val = 0, costed = 0;
   for (const p of S.products) { if (p.active === false) continue; const r = m[p.id]; wh += r.wh; out += r.out; if (p.cost != null) { val += (r.wh + r.out) * p.cost; costed++; } }
-  const nHid = S.products.filter(p => p.active === false && !hs.has(p.series)).length + hs.size + S.channels.filter(c => c.active === false).length;
-  const visSeries = [...groups(list).keys()];
+  const nHid = S.products.filter(p => p.active === false && !hs.has(p.series) && !hc.has(catOf(p))).length + [...hs].filter(x => S.products.some(p => p.series === x && !hc.has(catOf(p)))).length + hc.size + S.channels.filter(c => c.active === false).length;
+  const catsAll = [...vs.catOrder.filter(c => S.products.some(p => catOf(p) === c)), ...new Set(S.products.map(catOf).filter(c => !vs.catOrder.includes(c)))];
+  const cats = catsAll.filter(c => list.some(p => catOf(p) === c));
+  const sumCells = ps => `<td class="n c2">${ps.reduce((a, p) => a + m[p.id].wh, 0)}</td><td class="n cumin">${ps.reduce((a, p) => a + m[p.id].in, 0) || ''}</td><td class="n cumin cumsold">${ps.reduce((a, p) => a + m[p.id].sold, 0) || ''}</td>${cols.map(c => {
+      const cs = c.g.t === 'consign', sum = f => ps.reduce((a, p) => a + (f(m[p.id]) || 0), 0), gl = c === cols.find(x => x.g === c.g) ? 'gl' : '';
+      if (c.k === 'sum') return `<td class="n gl ${cs ? 'cs' : ''}">${sum(r => c.g.chs.reduce((a, x) => a + ((cs ? r.ch : r.cum)[x.id] || 0), 0)) || ''}${cs ? soldTag(sum(r => c.g.chs.reduce((a, x) => a + (r.csold[x.id] || 0), 0))) : ''}</td>`;
+      const v = sum(r => cellVal(r, c.k));
+      return `<td class="n ${cs ? 'cs' : ''} ${c.sub ? 'rt' : ''} ${gl}">${v || ''}${c.c && c.c.type === 'consign' && !c.sub ? soldTag(sum(r => r.csold[c.c.id])) : ''}</td>`;
+    }).join('')}`;
   const ncol = cols.length + 4;
+  const soldTag = n => n ? `<small class="sold" title="这家店累计卖出 ${n} 件">卖${n}</small>` : '';
   const cell = (p, r, k, cls = '', sub = '') => {
     const v = cellVal(r, k);
     if (ui.act === p.id + '|' + k) return `<td class="cell on ${cls}"><span class="stp"><button data-act="step" data-d="-1" tabindex="-1">－</button><input id="cellin" type="number" inputmode="numeric" data-pid="${p.id}" data-col="${k}" value="${v}"><button data-act="step" data-d="1" tabindex="-1">＋</button></span></td>`;
     return `<td class="n cell ${v < 0 ? 'neg' : ''} ${cls}" data-act="cell" data-pid="${p.id}" data-col="${k}">${v === 0 && k !== 'wh' ? '' : v}${sub}</td>`;
   };
-  const soldTag = n => n ? `<small class="sold" title="这家店累计卖出 ${n} 件">卖${n}</small>` : '';
   const colCell = (p, r, c) => {
     if (c.k === 'sum') { const v = c.g.chs.reduce((a, x) => a + ((c.g.t === 'consign' ? r.ch : r.cum)[x.id] || 0), 0); return `<td class="n ro gl ${c.g.t === 'consign' ? 'cs' : ''}">${v || ''}${c.g.t === 'consign' ? soldTag(c.g.chs.reduce((a, x) => a + (r.csold[x.id] || 0), 0)) : ''}</td>`; }
     return cell(p, r, c.k, (c.g.t === 'consign' ? 'cs ' : '') + (c.sub ? 'rt ' : '') + (c === cols.find(x => x.g === c.g) ? 'gl' : ''), c.c && c.c.type === 'consign' && !c.sub ? soldTag(r.csold[c.c.id] || 0) : '');
   };
   let rows = '';
-  for (const [series, ps] of groups(list)) {
-    const closed = ui.closed[series] && !ui.q;
-    rows += `<tr class="grp" data-act="fold" data-k="${esc(series)}" ${ui.q ? '' : `draggable="true" data-drag="s:${esc(series)}" data-drop="s:${esc(series)}" data-dir="v" title="按住可以上下拖动，调整品类顺序"`}><td class="c1"><i class="grip2">⠿</i>${closed ? '＋' : '－'} ${esc(series || '未分类')}<span class="sacts">${!hidden && !ui.q ? `<button class="x mv" data-act="smove" data-k="${esc(series)}" data-d="-1" title="上移这个品类" ${visSeries[0] === series ? 'disabled' : ''}>↑</button><button class="x mv" data-act="smove" data-k="${esc(series)}" data-d="1" title="下移这个品类" ${visSeries[visSeries.length - 1] === series ? 'disabled' : ''}>↓</button>` : ''}${hidden && !hs.has(series) ? '' : `<button class="x eye" data-act="hides" data-k="${esc(series)}" title="${hs.has(series) ? '恢复显示这个品类' : '隐藏整个品类（数量保留，在「已隐藏」里能找回）'}">${hs.has(series) ? EYE_OFF : EYE}</button>`}</span></td><td class="n c2">${ps.reduce((a, p) => a + m[p.id].wh, 0)}</td><td class="n cumin">${ps.reduce((a, p) => a + m[p.id].in, 0) || ''}</td><td class="n cumin cumsold">${ps.reduce((a, p) => a + m[p.id].sold, 0) || ''}</td>${cols.map(c => {
-      const cs = c.g.t === 'consign', sum = f => ps.reduce((a, p) => a + (f(m[p.id]) || 0), 0), gl = c === cols.find(x => x.g === c.g) ? 'gl' : '';
-      if (c.k === 'sum') return `<td class="n gl ${cs ? 'cs' : ''}">${sum(r => c.g.chs.reduce((a, x) => a + ((cs ? r.ch : r.cum)[x.id] || 0), 0)) || ''}${cs ? soldTag(sum(r => c.g.chs.reduce((a, x) => a + (r.csold[x.id] || 0), 0))) : ''}</td>`;
-      const v = sum(r => cellVal(r, c.k));
-      return `<td class="n ${cs ? 'cs' : ''} ${c.sub ? 'rt' : ''} ${gl}">${v || ''}${c.c && c.c.type === 'consign' && !c.sub ? soldTag(sum(r => r.csold[c.c.id])) : ''}</td>`;
-    }).join('')}</tr>`;
-    if (closed) continue;
-    for (const p of ps) {
-      const r = m[p.id];
-      rows += `<tr data-drop="p:${p.id}" data-dir="v"><td class="c1 nm" style="${swatch(p)}" draggable="true" data-drag="p:${p.id}" title="按住可以上下拖动，调整同品类里的顺序"><button class="link" data-act="open" data-id="${p.id}">${esc(p.name)}</button>${p.note ? '<i class="dot" title="有待确认事项"></i>' : ''}${hidden && hs.has(p.series) && p.active !== false ? '' : `<button class="x eye" data-act="hidep" data-id="${p.id}" title="${hidden ? '恢复显示' : '隐藏这个产品（数量保留）'}">${hidden ? EYE_OFF : EYE}</button>`}</td>`
-        + cell(p, r, 'wh', 'c2 wh') + cell(p, r, 'in', 'cumin') + `<td class="n ro cumin cumsold" title="各渠道累计卖出（直营 + 代发 + 寄售店已结算）">${r.sold || ''}</td>` + cols.map(c => colCell(p, r, c)).join('') + `</tr>`;
-      if (ui.open[p.id]) {
-        const at = Object.entries(r.ch).filter(e => e[1]).map(([k, v]) => `${esc(C(k)?.name || k)} ${v}`).join('　') || '无';
-        const f = (k, l, w, type = 'text') => `<label>${l}<input type="${type}" ${type === 'number' ? 'step="0.01" min="0"' : ''} style="width:${w}px" data-pid="${p.id}" data-f="${k}" value="${esc(p[k] ?? '')}"></label>`;
-        rows += `<tr class="det"><td colspan="${ncol}"><div class="edit">${f('name', '名称', 110)}${f('series', '系列', 150)}<label>分类<select data-pid="${p.id}" data-f="cat"><option value=""></option>${CATS4.map(c => `<option ${p.cat === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>${f('sku', '款号', 110)}<button class="sm" data-act="gen" data-id="${p.id}">${ui.gen === p.id ? '收起' : '生成款号'}</button>${f('barcode', '条码', 130)}${f('cost', '成本 ¥', 70, 'number')}${f('price', '售价 ¥', 70, 'number')}<label>颜色<input type="color" data-pid="${p.id}" data-f="color" value="${colorOf(p) || '#e8e4da'}"></label><button class="sm" data-act="hidep" data-id="${p.id}">${hidden ? '恢复显示' : '隐藏'}</button></div>
-          ${ui.gen === p.id ? (() => { const k = skuParts(p.sku) || {}; const opt = (list, cur) => list.map(x => `<option value="${x[0]}" ${x[0] === cur ? 'selected' : ''}>${x[0]} · ${x[1]}</option>`).join('');
-            return `<div class="gen" data-pid="${p.id}"><span>款号 = FF + 系列 + 品类 + 颜色 + 序号</span><select id="gser"><option value="">系列</option>${opt(SKU_SER, k.ser)}</select><select id="gcat"><option value="">品类</option>${opt(SKU_CAT, k.cat)}</select><select id="gcol"><option value="">颜色</option>${opt(SKU_COL, k.col)}</select><input id="gnum" type="number" min="1" max="99" placeholder="序号" value="${k.num ? Number(k.num) : ''}" style="width:64px"><b id="gout"></b><i id="gsw"></i><button class="sm" data-act="genok" data-id="${p.id}">用这个款号</button><span class="hint" id="ghint"></span></div>`; })() : ''}
-          <div class="cp"><span>各渠道单价</span>${S.channels.filter(c => c.active !== false && c.type !== 'gift' && ((r.cum[c.id] || 0) > 0 || (r.ch[c.id] || 0) !== 0)).map(c => { const o = S.cprice && S.cprice[c.id] && S.cprice[c.id][p.id], d = p.price == null ? '' : Math.round(p.price * rateOf(c) * 100) / 100; const cr = S.crate && S.crate[c.id] && S.crate[c.id][p.id]; return `<label>${esc(c.name)}<input data-cp="${c.id}" data-pid="${p.id}" value="${o != null ? o : cr != null ? Math.round(cr * 100) + '%' : ''}" placeholder="${d}"></label>`; }).join('')}<span class="hint">只列出这个产品进过的店。留空 = 零售价 × 这家店的结算比例（直营就是零售价）；也可以填一口价（如 395）或单独的比例（如 40%）</span></div>
-          <div>${p.en ? esc(p.en) + '　' : ''}现在在寄售店：${at}${r.adj ? '　盘点调整 ' + r.adj : ''}${p.note ? '<br>待确认：' + esc(p.note) : ''}</div></td></tr>`;
+  for (const cat of cats) {
+    const cps = list.filter(p => catOf(p) === cat), sers = [...groups(cps).keys()], cclosed = ui.cclosed[cat] && !ui.q, chid = hc.has(cat);
+    rows += `<tr class="catrow" data-act="cfold" data-k="${esc(cat)}"><td class="c1" title="${esc(cat || '未分类')}"><b class="tw">${cclosed ? '▸' : '▾'}</b>${esc(cat || '未分类')}<span class="sacts">${!hidden && !ui.q ? `<button class="x mv" data-act="cmove" data-k="${esc(cat)}" data-d="-1" title="上移这个分类" ${cats[0] === cat ? 'disabled' : ''}>↑</button><button class="x mv" data-act="cmove" data-k="${esc(cat)}" data-d="1" title="下移这个分类" ${cats[cats.length - 1] === cat ? 'disabled' : ''}>↓</button>` : ''}${hidden && !chid ? '' : `<button class="x eye" data-act="hidecat" data-k="${esc(cat)}" title="${chid ? '恢复显示这个分类' : '隐藏整个分类（数量保留，在「已隐藏」里能找回）'}">${chid ? EYE_OFF : EYE}</button>`}</span></td>${sumCells(cps)}</tr>`;
+    if (cclosed) continue;
+    for (const [series, ps] of groups(cps)) {
+      const closed = ui.closed[cat + '|' + series] && !ui.q;
+      rows += `<tr class="grp" data-act="fold" data-k="${esc(cat + '|' + series)}" ${ui.q ? '' : `draggable="true" data-drag="s:${esc(series)}" data-drop="s:${esc(series)}" data-dir="v" title="按住可以上下拖动，调整品类顺序"`}><td class="c1" title="${esc(series)}">${closed ? '＋' : '－'} ${esc(series || '未分类')}<span class="sacts">${!hidden && !ui.q ? `<button class="x mv" data-act="smove" data-k="${esc(series)}" data-c="${esc(cat)}" data-d="-1" title="上移这个品类" ${sers[0] === series ? 'disabled' : ''}>↑</button><button class="x mv" data-act="smove" data-k="${esc(series)}" data-c="${esc(cat)}" data-d="1" title="下移这个品类" ${sers[sers.length - 1] === series ? 'disabled' : ''}>↓</button>` : ''}${hidden && (!hs.has(series) || hc.has(cat)) ? '' : `<button class="x eye" data-act="hides" data-k="${esc(series)}" title="${hs.has(series) ? '恢复显示这个品类' : '隐藏整个品类（数量保留，在「已隐藏」里能找回）'}">${hs.has(series) ? EYE_OFF : EYE}</button>`}</span></td>${sumCells(ps)}</tr>`;
+      if (closed) continue;
+      for (const p of ps) {
+        const r = m[p.id];
+        rows += `<tr data-drop="p:${p.id}" data-dir="v"><td class="c1 nm" style="${swatch(p)}" draggable="true" data-drag="p:${p.id}" title="按住可以上下拖动，调整同品类里的顺序"><button class="link" data-act="open" data-id="${p.id}">${esc(p.name)}</button>${p.note ? '<i class="dot" title="有待确认事项"></i>' : ''}${hidden && (hs.has(p.series) || hc.has(catOf(p))) && p.active !== false ? '' : `<button class="x eye" data-act="hidep" data-id="${p.id}" title="${hidden ? '恢复显示' : '隐藏这个产品（数量保留）'}">${hidden ? EYE_OFF : EYE}</button>`}</td>`
+          + cell(p, r, 'wh', 'c2 wh') + cell(p, r, 'in', 'cumin') + `<td class="n ro cumin cumsold" title="各渠道累计卖出（直营 + 代发 + 寄售店已结算）">${r.sold || ''}</td>` + cols.map(c => colCell(p, r, c)).join('') + `</tr>`;
+        if (ui.open[p.id]) {
+          const at = Object.entries(r.ch).filter(e => e[1]).map(([k, v]) => `${esc(C(k)?.name || k)} ${v}`).join('　') || '无';
+          const f = (k, l, w, type = 'text') => `<label>${l}<input type="${type}" ${type === 'number' ? 'step="0.01" min="0"' : ''} style="width:${w}px" data-pid="${p.id}" data-f="${k}" value="${esc(p[k] ?? '')}"></label>`;
+          rows += `<tr class="det"><td colspan="${ncol}"><div class="edit">${f('name', '名称', 110)}${f('series', '系列', 150)}<label>分类<select data-pid="${p.id}" data-f="cat"><option value=""></option>${CATS4.map(c => `<option ${p.cat === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>${f('sku', '款号', 110)}<button class="sm" data-act="gen" data-id="${p.id}">${ui.gen === p.id ? '收起' : '生成款号'}</button>${f('barcode', '条码', 130)}${f('cost', '成本 ¥', 70, 'number')}${f('price', '售价 ¥', 70, 'number')}<label>颜色<input type="color" data-pid="${p.id}" data-f="color" value="${colorOf(p) || '#e8e4da'}"></label><button class="sm" data-act="hidep" data-id="${p.id}">${hidden ? '恢复显示' : '隐藏'}</button></div>
+            ${ui.gen === p.id ? (() => { const k = skuParts(p.sku) || {}; const opt = (list, cur) => list.map(x => `<option value="${x[0]}" ${x[0] === cur ? 'selected' : ''}>${x[0]} · ${x[1]}</option>`).join('');
+              return `<div class="gen" data-pid="${p.id}"><span>款号 = FF + 系列 + 品类 + 颜色 + 序号</span><select id="gser"><option value="">系列</option>${opt(SKU_SER, k.ser)}</select><select id="gcat"><option value="">品类</option>${opt(SKU_CAT, k.cat)}</select><select id="gcol"><option value="">颜色</option>${opt(SKU_COL, k.col)}</select><input id="gnum" type="number" min="1" max="99" placeholder="序号" value="${k.num ? Number(k.num) : ''}" style="width:64px"><b id="gout"></b><i id="gsw"></i><button class="sm" data-act="genok" data-id="${p.id}">用这个款号</button><span class="hint" id="ghint"></span></div>`; })() : ''}
+            <div class="cp"><span>各渠道单价</span>${S.channels.filter(c => c.active !== false && c.type !== 'gift' && ((r.cum[c.id] || 0) > 0 || (r.ch[c.id] || 0) !== 0)).map(c => { const o = S.cprice && S.cprice[c.id] && S.cprice[c.id][p.id], d = p.price == null ? '' : Math.round(p.price * rateOf(c) * 100) / 100; const cr = S.crate && S.crate[c.id] && S.crate[c.id][p.id]; return `<label>${esc(c.name)}<input data-cp="${c.id}" data-pid="${p.id}" value="${o != null ? o : cr != null ? Math.round(cr * 100) + '%' : ''}" placeholder="${d}"></label>`; }).join('')}<span class="hint">只列出这个产品进过的店。留空 = 零售价 × 这家店的结算比例（直营就是零售价）；也可以填一口价（如 395）或单独的比例（如 40%）</span></div>
+            <div>${p.en ? esc(p.en) + '　' : ''}现在在寄售店：${at}${r.adj ? '　盘点调整 ' + r.adj : ''}${p.note ? '<br>待确认：' + esc(p.note) : ''}</div></td></tr>`;
+        }
+      }
+      if (!hidden && !ui.q) {
+        const hid = S.products.filter(p => p.series === series && catOf(p) === cat && p.active === false);
+        rows += `<tr class="add"><td colspan="${ncol}"><div class="addrow">${hid.length ? `<span class="hint">加回：</span>${hid.map(p => `<button class="chip" data-act="hidep" data-id="${p.id}" style="${swatch(p)}" title="点一下恢复显示">＋ ${esc(p.name)}</button>`).join('')}` : ''}<input data-add="product" data-series="${esc(series)}" data-cat="${esc(cat)}" placeholder="＋ 新颜色 / 花纹，输入名字回车"></div></td></tr>`;
       }
     }
-    if (!hidden && !ui.q) {
-      const hid = S.products.filter(p => p.series === series && p.active === false);
-      rows += `<tr class="add"><td colspan="${ncol}"><div class="addrow">${hid.length ? `<span class="hint">加回：</span>${hid.map(p => `<button class="chip" data-act="hidep" data-id="${p.id}" style="${swatch(p)}" title="点一下恢复显示">＋ ${esc(p.name)}</button>`).join('')}` : ''}<input data-add="product" data-series="${esc(series)}" placeholder="＋ 新颜色 / 花纹，输入名字回车"></div></td></tr>`;
-    }
+    if (!hidden && !ui.q) rows += `<tr class="add"><td colspan="${ncol}"><div class="addrow"><input data-add="series" data-cat="${esc(cat)}" placeholder="＋ ${esc(cat || '未分类')} 里的新品类，输入名字回车"></div></td></tr>`;
   }
-  if (!hidden && !ui.q) rows += `<tr class="add"><td colspan="${ncol}"><div class="addrow"><input data-add="series" placeholder="＋ 新系列，输入名字回车"></div></td></tr>`;
   const h1 = `<th class="c1" rowspan="2">产品</th><th class="n c2" rowspan="2">本仓</th><th class="n" rowspan="2" title="这个产品累计进了多少货">累计<br>进货</th><th class="n" rowspan="2" title="各渠道累计卖出：直营 + 代发 + 寄售店已结算的">累计<br>卖出</th>` + groupsCh.map((g, gi) => `<th class="gh ${g.t}" colspan="${cols.filter(c => c.g === g).length}" draggable="true" data-drag="g:${g.t}" data-drop="g:${g.t}" title="按住可以整组左右拖动，或点 ‹ › 移动"><button class="fold" data-act="gfold" data-id="${g.t}" title="${g.fold ? '展开' : '收起'}">${g.fold ? '＋' : '－'}</button> ${g.fold ? GSHORT[g.t] : g.l}<span class="gmv"><button class="x mv" data-act="gmove" data-id="${g.t}" data-d="-1" title="整组往左移" ${gi === 0 ? 'disabled' : ''}>‹</button><button class="x mv" data-act="gmove" data-id="${g.t}" data-d="1" title="整组往右移" ${gi === groupsCh.length - 1 ? 'disabled' : ''}>›</button></span></th>`).join('');
   const h2 = cols.map(c => c.k === 'sum' ? `<th class="n r2 sub gl">${c.g.t === 'consign' ? '在店' : '合计'}</th>` : c.sub ? `<th class="n r2 sub" title="${c.c ? esc(c.c.name) + ' 退回给我们的数量' : '直营渠道的客人退货'}">${c.sub}</th>`
     : `<th class="n r2 ${c.c.type} ${c === cols.find(x => x.g === c.g) ? 'gl' : ''}" draggable="true" data-drag="${c.c.id}" data-drop="${c.c.id}" title="按住可以左右拖动排序"><span>${esc(c.c.name)}</span><button class="x eye" data-act="hidec" data-id="${c.c.id}" title="${hidden ? '恢复显示' : '隐藏这个渠道（数量保留）'}">${hidden ? EYE_OFF : EYE}</button></th>`).join('');
   return `<div class="tools">
     <input type="search" id="q" placeholder="搜索名称 / 款号 / 条码" value="${esc(ui.q)}">
+    <button data-act="vis" title="按 分类 → 品类 → 产品 勾选要显示的">显示设置</button>
     <div class="seg">${[['all', '全部'], ['stock', '只看有库存'], ['hidden', `已隐藏 ${nHid || ''}`]].map(([k, l]) => `<button data-act="show" data-v="${k}" class="${ui.show === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div class="seg">${[['', '全部分类'], ...CATS4.map(c => [c, c])].map(([k, l]) => `<button data-act="cat" data-v="${k}" class="${ui.cat === k ? 'on' : ''}">${l}</button>`).join('')}</div>
     <span class="addch"><input data-add="channel" placeholder="＋ 新渠道，输入名字回车"><select id="newch">${Object.entries(CH_TYPES).reverse().map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></span>
     <span class="tot">本仓 <b>${wh}</b>　寄售在店 <b>${out}</b>　累计进货 <b>${S.products.reduce((a, p) => a + m[p.id].in, 0)}</b>　累计卖出 <b>${S.products.reduce((a, p) => a + m[p.id].sold, 0)}</b>${costed ? `　库存金额 <b>${money(val)}</b>` : ''}</span></div>
   <div class="wrap grid"><table><thead><tr>${h1}</tr><tr>${h2}</tr></thead><tbody>${rows || `<tr><td colspan="${ncol}" class="empty">${hidden ? '没有隐藏的产品' : '没有符合的产品'}</td></tr>`}</tbody></table></div>
-  <p class="hint">点任意一格，按 ＋ － 或直接改数字，自动保存。渠道组：左上角 － 收起成一列，‹ › 整组左右移；单个渠道按住拖动换位置，小眼睛隐藏。品类：↑ ↓ 上下移（也能按住拖动），小眼睛隐藏整个品类。隐藏的都在「已隐藏」里，数量都保留。寄售店的格子是现在还在店里的数量。</p>`;
+  <p class="hint">点任意一格，按 ＋ － 或直接改数字，自动保存。渠道组：左上角 － 收起成一列，‹ › 整组左右移；单个渠道按住拖动换位置，小眼睛隐藏。分类、品类：↑ ↓ 上下移，小眼睛隐藏整个分类 / 品类，点名字收起；也可以点「显示设置」一次勾选。隐藏的都在「已隐藏」里，数量都保留。寄售店的格子是现在还在店里的数量。</p>`;
 }
 
 /* ---------- 流水 ---------- */
@@ -733,7 +752,7 @@ function vChannels() {
       <td>${used ? '' : `<button class="sm" data-act="delc" data-id="${c.id}">删除</button>`}</td></tr>`;
     });
   }
-  return `<p class="note">类型可以随时改：直营 = 卖出即出库；代发 = 合作店铺有订单我们才发，发出即售出，库存页多一列「退回」；寄售 = 货放在店里、卖出前仍属于我们；赠送 = KOL、朋友。改类型时，这个渠道以前的数量会一起换成新口径，不会丢。<br>不再合作的渠道点小眼睛隐藏：库存页不再显示这一列，但卖过的数量照样有效。拖左边的 ⠿ 或点 ↑ ↓ 调整顺序，库存页的列顺序跟着变。<br>结算比例 = 卖出一件我们拿零售价的百分之几。四六分填 60，五五分填 50，45/55 填 55。个别产品在这家店价格不一样的，点库存页的产品名，在「各渠道单价」里单独填。</p>
+  return `<p class="note">类型可以随时改：直营 = 卖出即出库；订货 = 对方直接向我们买货（比如财神庙），发出即卖出，「结算比例」填给他们的批发折扣；代发 = 合作店铺有订单我们才发，发出即售出，库存页多一列「退回」；寄售 = 货放在店里、卖出前仍属于我们；赠送 = KOL、朋友。改类型时，这个渠道以前的数量会一起换成新口径，不会丢。<br>不再合作的渠道点小眼睛隐藏：库存页不再显示这一列，但卖过的数量照样有效。拖左边的 ⠿ 或点 ↑ ↓ 调整顺序，库存页的列顺序跟着变。<br>结算比例 = 卖出一件我们拿零售价的百分之几。四六分填 60，五五分填 50，45/55 填 55。个别产品在这家店价格不一样的，点库存页的产品名，在「各渠道单价」里单独填。</p>
   <div class="tools"><span class="addch"><input data-add="channel" placeholder="＋ 新渠道，输入名字回车"><select id="newch">${Object.entries(CH_TYPES).reverse().map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></span></div>
   <div class="wrap"><table><thead><tr><th></th><th>名称</th><th>类型</th><th>结算比例（我们拿）</th><th class="n">累计出货</th><th class="n">现在在店</th><th>显示</th><th>顺序</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -941,7 +960,13 @@ document.addEventListener('click', e => {
   else if (a === 'gen') { ui.gen = ui.gen === id ? null : id; ui.open[id] = true; render(); genPreview(); }
   else if (a === 'genok') { const code = genCode(); if (!code) { $('#ghint').textContent = '系列、品类、颜色、序号都要选。'; return; } const p = P(id), cat = (SKU_CAT.find(x => x[0] === $('#gcat').value) || [])[2]; p.sku = code; delete p.color; if (!p.cat && cat) p.cat = cat; ui.gen = null; save(); render(); }
   else if (a === 'hides') { const v = viewState(), k = b.dataset.k; v.hideSeries = v.hideSeries.includes(k) ? v.hideSeries.filter(x => x !== k) : v.hideSeries.concat(k); if (!v.hideSeries.length && ui.show === 'hidden' && !S.products.some(p => p.active === false) && !S.channels.some(c => c.active === false)) ui.show = 'all'; save(); render(); }
-  else if (a === 'smove') { const k = b.dataset.k, d = Number(b.dataset.d), hs = new Set(viewState().hideSeries), order = [...new Set(S.products.filter(p => p.active !== false && !hs.has(p.series) && (!ui.cat || p.cat === ui.cat)).map(p => p.series))], i = order.indexOf(k), t = order[i + d]; if (t != null) { moveSeries(k, t, d > 0); render(); } }
+  else if (a === 'smove') { const k = b.dataset.k, c = b.dataset.c || '', d = Number(b.dataset.d), hs = new Set(viewState().hideSeries), order = [...new Set(S.products.filter(p => p.active !== false && !hs.has(p.series) && (p.cat || '') === c).map(p => p.series))], i = order.indexOf(k), t = order[i + d]; if (t != null) { moveSeries(k, t, d > 0); render(); } }
+  else if (a === 'cfold') { ui.cclosed[b.dataset.k] = !ui.cclosed[b.dataset.k]; render(); }
+  else if (a === 'hidecat') { const v = viewState(), k = b.dataset.k; v.hideCat = v.hideCat.includes(k) ? v.hideCat.filter(x => x !== k) : v.hideCat.concat(k); save(); render(); }
+  else if (a === 'cmove') { const v = viewState(), k = b.dataset.k, d = Number(b.dataset.d), hc = new Set(v.hideCat), hs = new Set(v.hideSeries); for (const c of new Set(S.products.map(p => p.cat || ''))) if (!v.catOrder.includes(c)) v.catOrder.push(c);
+    const vis = v.catOrder.filter(c => !hc.has(c) && S.products.some(p => (p.cat || '') === c && p.active !== false && !hs.has(p.series))), i = vis.indexOf(k), t = vis[i + d]; if (t == null) return;
+    v.catOrder = v.catOrder.filter(c => c !== k); v.catOrder.splice(v.catOrder.indexOf(t) + (d > 0 ? 1 : 0), 0, k); save(); render(); }
+  else if (a === 'vis') openVis();
   else if (a === 'gmove') { const vis = gridCols().filter(g => g.chs.length).map(g => g.t), i = vis.indexOf(id), t = vis[i + Number(b.dataset.d)]; if (t) { moveGroup(id, t, Number(b.dataset.d) > 0); render(); } }
   else if (a === 'hidep') { const p = P(id); p.active = p.active === false; save(); render(); }
   else if (a === 'hidec') { const c = C(id); c.active = c.active === false; save(); render(); }
@@ -1051,6 +1076,13 @@ document.addEventListener('input', e => {
     t.classList.toggle('bad', !ok && t.value !== ''); if (ok) tr.querySelector('.sold').value = have - v || ''; settleSum();
   }
   else if (t.classList.contains('sold') || t.classList.contains('sp')) settleSum();
+  else if (t.dataset.vis) {
+    const [k, v] = [t.dataset.vis.slice(0, 1), t.dataset.vis.slice(2)], vs = viewState(), on = t.checked;
+    if (k === 'c') vs.hideCat = on ? vs.hideCat.filter(x => x !== v) : [...new Set(vs.hideCat.concat(v))];
+    else if (k === 's') vs.hideSeries = on ? vs.hideSeries.filter(x => x !== v) : [...new Set(vs.hideSeries.concat(v))];
+    else { const p = P(v); if (p) p.active = on; }
+    save(); render();
+  }
   else if (t.closest('#dlg') && rec && rec.armed) { rec.armed = false; $('#rs').textContent = '保存'; $('#rmsg2').textContent = ''; }
 });
 document.addEventListener('change', e => {
@@ -1103,7 +1135,7 @@ document.addEventListener('keydown', e => {
   if (add && e.key === 'Enter') {
     e.preventDefault(); const v = e.target.value.trim(); if (!v) return;
     if (add === 'channel') { addChannel(v, $('#newch').value); ui.show = 'all'; render(); if (view !== 'stock') return; const w = $('#view .wrap'); const th = [...document.querySelectorAll('#view th.r2')].find(x => x.firstChild.textContent === v); if (th && w) w.scrollLeft = th.offsetLeft - 260; }
-    else { const p = add === 'series' ? addProduct('新产品', v) : addProduct(v, e.target.dataset.series); ui.open[p.id] = add === 'series'; render(); if (add === 'series') { const i = $(`#view input[data-pid="${p.id}"][data-f="name"]`); i.focus(); i.select(); } else { const i = $(`#view input[data-add="product"][data-series="${CSS.escape(p.series)}"]`); if (i) i.focus(); } }
+    else { const cat = e.target.dataset.cat, p = add === 'series' ? addProduct('新产品', v, cat) : addProduct(v, e.target.dataset.series, cat); ui.open[p.id] = add === 'series'; render(); if (add === 'series') { const i = $(`#view input[data-pid="${p.id}"][data-f="name"]`); i.focus(); i.select(); } else { const i = $(`#view input[data-add="product"][data-series="${CSS.escape(p.series)}"]`); if (i) i.focus(); } }
     return;
   }
   if (!ui.act) return;

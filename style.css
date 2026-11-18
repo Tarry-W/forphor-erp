@@ -305,3 +305,53 @@ button.x.mv{border:0;background:none;padding:0 4px;font-size:13px;line-height:1;
 button.x.mv:disabled{opacity:.25;cursor:default}
 .calsel{max-width:240px}
 .calsel.bad{outline:2px solid var(--red)}
+
+/* 2026-11-18b：表格更紧凑；分类 → 品类 → 产品三级；显示设置 */
+.wrap.grid table{font-size:13px}
+.wrap.grid th,.wrap.grid td{padding:3px 7px}
+.wrap.grid thead tr:first-child th{height:26px}
+.wrap.grid thead th.r2{top:26px;padding:3px 16px 3px 6px;position:sticky}
+.wrap.grid .c1{width:150px;min-width:150px;max-width:150px}
+.wrap.grid .c2{left:150px;min-width:50px}
+.wrap.grid td.wh{font-size:14px}
+td.cell{min-width:38px}
+.wrap.grid td.nm .link{max-width:108px}
+th.r2>button.x.eye{position:absolute;right:1px;top:50%;transform:translateY(-50%);margin:0;padding:0 2px}
+small.sold{font-size:10px}
+.wrap.grid tr.catrow td{background:#dcd6c8;border-top:2px solid var(--ink);font-weight:600;cursor:pointer;padding-top:5px;padding-bottom:5px}
+.wrap.grid tr.catrow td.c1{font-size:13px;letter-spacing:.02em}
+.wrap.grid tbody tr.catrow:hover td{background:#d3ccbc}
+.tw{display:inline-block;width:14px;font-weight:400;color:var(--mute)}
+.wrap.grid tr.grp td.c1{padding-left:16px}
+.wrap.grid td.nm{padding-left:22px}
+tr.catrow .sacts button.x{opacity:1!important;float:none;margin:0;display:inline-block}
+.sacts button.x.eye{opacity:1}
+.vtree{max-height:62vh;overflow:auto;border-top:1px solid var(--line);margin:10px 0;min-width:min(520px,80vw)}
+.vtree details{border-bottom:1px solid var(--line2)}
+.vtree summary{padding:6px 2px;cursor:pointer;list-style:revert}
+.vtree .vkids{padding-left:20px}
+.vtree .vs summary{padding:4px 2px}
+.vtree .vleaf{display:flex;flex-wrap:wrap;gap:4px;padding:4px 0 8px 22px}
+.vtree .vp{padding:2px 8px 2px 4px;font-size:12px}
+.vtree details:has(> summary input:not(:checked)) > .vkids{opacity:.35}
+.vtree label{cursor:pointer}
+@media(max-width:760px){
+ .wrap.grid .c1{width:112px;min-width:112px;max-width:112px}
+ .wrap.grid .c2{left:112px}
+ .sacts button.x{display:inline-block}
+}
+
+/* 品类 / 分类行：名字完整显示，按钮悬停时浮在右边 */
+.wrap.grid tr.grp td.c1{padding-right:7px!important}
+.sacts{background:inherit;padding-left:4px}
+tr.grp td.c1 .sacts{background:var(--ground)}
+tr.catrow td.c1 .sacts{background:#d3ccbc}
+@media(hover:hover){.sacts{opacity:0!important}tr.grp:hover .sacts,tr.catrow:hover .sacts{opacity:1!important}}
+.grip2{display:none}
+/* 显示设置面板 */
+dialog:has(.vtree){width:min(640px,94vw)}
+dialog .vtree,dialog:has(.vtree)>p,dialog:has(.vtree)>.tools{margin-left:18px;margin-right:18px}
+dialog:has(.vtree)>.tools{margin-bottom:16px}
+dialog .vtree label{display:inline-flex;align-items:center;gap:6px;color:var(--ink);font-size:13px}
+dialog .vtree input[type=checkbox]{width:auto;padding:0;margin:0}
+dialog .vtree .vp{border:0}
