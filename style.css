@@ -294,3 +294,14 @@ tr.htot td{background:var(--ground);border-top:2px solid var(--ink)}
 #toast.show{opacity:1;transform:translateX(-50%)}
 a.btnlink{font-size:13px;margin-left:8px;color:var(--ink)}
 #saved.neg{color:var(--red)}
+
+.wrap.grid tr.grp td.c1{padding-right:66px}
+.sacts{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;opacity:.45}
+tr.grp:hover .sacts{opacity:1}
+.gmv{margin-left:10px;display:inline-flex;align-items:center;opacity:.45}
+th.gh:hover .gmv{opacity:1}
+.sacts button.x,.gmv button.x{opacity:1!important;float:none;margin:0;display:inline-block}
+button.x.mv{border:0;background:none;padding:0 4px;font-size:13px;line-height:1;cursor:pointer;color:var(--ink)}
+button.x.mv:disabled{opacity:.25;cursor:default}
+.calsel{max-width:240px}
+.calsel.bad{outline:2px solid var(--red)}

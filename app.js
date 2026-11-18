@@ -2,6 +2,7 @@
    数据结构：products 产品 / channels 渠道 / tx 流水。库存全部由流水计算。 */
 (() => {
 'use strict';
+const APP_VERSION = '2026-11-18';
 const KEY = 'forphor-erp-v2', UKEY = 'forphor-erp-user';
 const USERS = ['Long', 'Burke'];
 // need: 该类型需要哪一类渠道；null = 不需要渠道
@@ -242,7 +243,7 @@ function addProduct(name, series) {
 /* ---------- 库存（可直接改数字的表格） ---------- */
 const GSHORT = { sale: '直营', drop: '代发', gift: '赠送', consign: '寄售' };
 const GROUPS0 = 0, GROUPS = [['sale', '直营'], ['drop', '代发（有订单才发，发出即售出）'], ['gift', '赠送'], ['consign', '寄售（现在还在店里的数量，仍属于我们）']];
-function viewState() { S.view = S.view || {}; S.view.order = (S.view.order || []).filter(t => GSHORT[t]); for (const [t] of GROUPS) if (!S.view.order.includes(t)) S.view.order.push(t); S.view.fold = S.view.fold || {}; return S.view; }
+function viewState() { S.view = S.view || {}; S.view.hideSeries = S.view.hideSeries || []; S.view.order = (S.view.order || []).filter(t => GSHORT[t]); for (const [t] of GROUPS) if (!S.view.order.includes(t)) S.view.order.push(t); S.view.fold = S.view.fold || {}; return S.view; }
 function gridCols() {
   const hidden = ui.show === 'hidden', v = viewState();
   return v.order.map(t => ({ t, l: GROUPS.find(g => g[0] === t)[1], fold: !!v.fold[t], chs: S.channels.filter(c => c.type === t && (c.active !== false) !== hidden) }));
@@ -271,13 +272,25 @@ function commitInput() {
   if (isNaN(v) || (v < 0 && k !== 'wh')) return;
   applyDelta(pid, k, v - cellVal(compute()[pid], k));
 }
+const CAL_HOW = {
+  back: { l: '退回本仓', type: 'c_back', dir: -1, fx: '本仓 +' },
+  sold: { l: '其实卖掉了', type: 'c_sold', dir: -1, fx: '算卖出，账单金额另补' },
+  loss: { l: '丢失 / 损坏 / 样品', type: 'adj', dir: -1, fx: '记为损耗，本仓不变' },
+  out:  { l: '发货漏登', type: 'c_out', dir: 1, fx: '本仓 −' },
+  plus: { l: '盘点多出', type: 'adj', dir: 1, fx: '本仓不变' },
+};
+function calSelect(diff) {   // diff < 0 店里少了，> 0 店里多了，0 还没改
+  const opts = Object.entries(CAL_HOW).filter(([, h]) => !diff || Math.sign(diff) === h.dir).map(([k, h]) => `<option value="${k}" data-dir="${h.dir}">${h.l}（${h.fx}）</option>`).join('');
+  return `<select class="calsel" ${diff ? '' : 'disabled'}><option value="">${diff ? '选去向…' : '—'}</option>${opts}</select>`;
+}
 function histTotal(id) {   // 对账记录最下面的合计：累计卖出件数、累计结算金额
   const rs = S.settles.filter(x => x.ch === id && !x.kind); if (!rs.length) return '';
   const n = rs.reduce((a, x) => a + x.lines.reduce((b, l) => b + (l.qty || 0), 0), 0), amt = Math.round(rs.reduce((a, x) => a + x.lines.reduce((b, l) => b + (l.price != null ? l.qty * l.price : 0), 0), 0) * 100) / 100;
   const m = compute(), tx = S.tx.filter(t => t.ch === id), sum = ty => tx.filter(t => ty.includes(t.type)).reduce((a, t) => a + t.qty, 0);
   const out = sum(['c_out']), back = sum(['c_back']), adj = sum(['adj']), ins = S.products.reduce((a, p) => a + (m[p.id].ch[id] || 0), 0);
+  const loss = -tx.filter(t => t.type === 'adj' && t.qty < 0).reduce((a, t) => a + t.qty, 0), plus = tx.filter(t => t.type === 'adj' && t.qty > 0).reduce((a, t) => a + t.qty, 0);
   return `<tr class="htot"><td><b>合计（${rs.length} 次结算）</b></td><td class="n"><b>卖出 ${n} 件</b></td><td class="n"><b>${money(amt)}</b></td><td colspan="2"></td></tr>`
-    + `<tr class="htot"><td colspan="5">在店 = 累计发出 <b>${out}</b> − 结算卖出 <b>${S.products.reduce((a, p) => a + (m[p.id].csold[id] || 0), 0)}</b>${back ? ` − 退回 <b>${back}</b>` : ''}${adj ? ` ${adj > 0 ? '+' : '−'} 手动校准 <b>${Math.abs(adj)}</b>` : ''} = <b>${ins}</b>${S.products.some(p => (m[p.id].ch[id] || 0) < 0) ? '　<span class="neg">有产品是负数：卖出比登记的发货多，发货可能漏登</span>' : ''}</td></tr>`;
+    + `<tr class="htot"><td colspan="5">在店 = 累计发出 <b>${out}</b> − 卖出 <b>${S.products.reduce((a, p) => a + (m[p.id].csold[id] || 0), 0)}</b>${back ? ` − 退回 <b>${back}</b>` : ''}${plus ? ` + 盘点多出 <b>${plus}</b>` : ''}${loss ? ` − 损耗 / 差异 <b>${loss}</b>` : ''} = <b>${ins}</b>${S.products.some(p => (m[p.id].ch[id] || 0) < 0) ? '　<span class="neg">有产品是负数：卖出比登记的发货多，发货可能漏登</span>' : ''}</td></tr>`;
 }
 function vStock() {
   const m = compute(), groupsCh = gridCols().filter(g => g.chs.length), hidden = ui.show === 'hidden';
@@ -287,10 +300,12 @@ function vStock() {
     for (const c of g.chs) { cols.push({ k: 'ch:' + c.id, c, g }); if (c.type === 'drop') cols.push({ k: 'rt:' + c.id, c, g, sub: '退回' }); }
     if (g.t === 'sale' && !hidden) cols.push({ k: 'ret', g, sub: '退货' });
   }
-  const list = S.products.filter(p => (hidden ? p.active === false : p.active !== false) && (!ui.cat || p.cat === ui.cat) && match(p, ui.q) && !(ui.show === 'stock' && m[p.id].wh === 0 && m[p.id].out === 0));
+  const hs = new Set(viewState().hideSeries), isHid = p => p.active === false || hs.has(p.series);
+  const list = S.products.filter(p => (hidden ? isHid(p) : !isHid(p)) && (!ui.cat || p.cat === ui.cat) && match(p, ui.q) && !(ui.show === 'stock' && m[p.id].wh === 0 && m[p.id].out === 0));
   let wh = 0, out = 0, val = 0, costed = 0;
   for (const p of S.products) { if (p.active === false) continue; const r = m[p.id]; wh += r.wh; out += r.out; if (p.cost != null) { val += (r.wh + r.out) * p.cost; costed++; } }
-  const nHid = S.products.filter(p => p.active === false).length + S.channels.filter(c => c.active === false).length;
+  const nHid = S.products.filter(p => p.active === false && !hs.has(p.series)).length + hs.size + S.channels.filter(c => c.active === false).length;
+  const visSeries = [...groups(list).keys()];
   const ncol = cols.length + 4;
   const cell = (p, r, k, cls = '', sub = '') => {
     const v = cellVal(r, k);
@@ -305,7 +320,7 @@ function vStock() {
   let rows = '';
   for (const [series, ps] of groups(list)) {
     const closed = ui.closed[series] && !ui.q;
-    rows += `<tr class="grp" data-act="fold" data-k="${esc(series)}" ${ui.q ? '' : `draggable="true" data-drag="s:${esc(series)}" data-drop="s:${esc(series)}" data-dir="v" title="按住可以上下拖动，调整品类顺序"`}><td class="c1"><i class="grip2">⠿</i>${closed ? '＋' : '－'} ${esc(series || '未分类')}</td><td class="n c2">${ps.reduce((a, p) => a + m[p.id].wh, 0)}</td><td class="n cumin">${ps.reduce((a, p) => a + m[p.id].in, 0) || ''}</td><td class="n cumin cumsold">${ps.reduce((a, p) => a + m[p.id].sold, 0) || ''}</td>${cols.map(c => {
+    rows += `<tr class="grp" data-act="fold" data-k="${esc(series)}" ${ui.q ? '' : `draggable="true" data-drag="s:${esc(series)}" data-drop="s:${esc(series)}" data-dir="v" title="按住可以上下拖动，调整品类顺序"`}><td class="c1"><i class="grip2">⠿</i>${closed ? '＋' : '－'} ${esc(series || '未分类')}<span class="sacts">${!hidden && !ui.q ? `<button class="x mv" data-act="smove" data-k="${esc(series)}" data-d="-1" title="上移这个品类" ${visSeries[0] === series ? 'disabled' : ''}>↑</button><button class="x mv" data-act="smove" data-k="${esc(series)}" data-d="1" title="下移这个品类" ${visSeries[visSeries.length - 1] === series ? 'disabled' : ''}>↓</button>` : ''}${hidden && !hs.has(series) ? '' : `<button class="x eye" data-act="hides" data-k="${esc(series)}" title="${hs.has(series) ? '恢复显示这个品类' : '隐藏整个品类（数量保留，在「已隐藏」里能找回）'}">${hs.has(series) ? EYE_OFF : EYE}</button>`}</span></td><td class="n c2">${ps.reduce((a, p) => a + m[p.id].wh, 0)}</td><td class="n cumin">${ps.reduce((a, p) => a + m[p.id].in, 0) || ''}</td><td class="n cumin cumsold">${ps.reduce((a, p) => a + m[p.id].sold, 0) || ''}</td>${cols.map(c => {
       const cs = c.g.t === 'consign', sum = f => ps.reduce((a, p) => a + (f(m[p.id]) || 0), 0), gl = c === cols.find(x => x.g === c.g) ? 'gl' : '';
       if (c.k === 'sum') return `<td class="n gl ${cs ? 'cs' : ''}">${sum(r => c.g.chs.reduce((a, x) => a + ((cs ? r.ch : r.cum)[x.id] || 0), 0)) || ''}${cs ? soldTag(sum(r => c.g.chs.reduce((a, x) => a + (r.csold[x.id] || 0), 0))) : ''}</td>`;
       const v = sum(r => cellVal(r, c.k));
@@ -314,7 +329,7 @@ function vStock() {
     if (closed) continue;
     for (const p of ps) {
       const r = m[p.id];
-      rows += `<tr data-drop="p:${p.id}" data-dir="v"><td class="c1 nm" style="${swatch(p)}" draggable="true" data-drag="p:${p.id}" title="按住可以上下拖动，调整同品类里的顺序"><button class="link" data-act="open" data-id="${p.id}">${esc(p.name)}</button>${p.note ? '<i class="dot" title="有待确认事项"></i>' : ''}<button class="x eye" data-act="hidep" data-id="${p.id}" title="${hidden ? '恢复显示' : '隐藏这个产品（数量保留）'}">${hidden ? EYE_OFF : EYE}</button></td>`
+      rows += `<tr data-drop="p:${p.id}" data-dir="v"><td class="c1 nm" style="${swatch(p)}" draggable="true" data-drag="p:${p.id}" title="按住可以上下拖动，调整同品类里的顺序"><button class="link" data-act="open" data-id="${p.id}">${esc(p.name)}</button>${p.note ? '<i class="dot" title="有待确认事项"></i>' : ''}${hidden && hs.has(p.series) && p.active !== false ? '' : `<button class="x eye" data-act="hidep" data-id="${p.id}" title="${hidden ? '恢复显示' : '隐藏这个产品（数量保留）'}">${hidden ? EYE_OFF : EYE}</button>`}</td>`
         + cell(p, r, 'wh', 'c2 wh') + cell(p, r, 'in', 'cumin') + `<td class="n ro cumin cumsold" title="各渠道累计卖出（直营 + 代发 + 寄售店已结算）">${r.sold || ''}</td>` + cols.map(c => colCell(p, r, c)).join('') + `</tr>`;
       if (ui.open[p.id]) {
         const at = Object.entries(r.ch).filter(e => e[1]).map(([k, v]) => `${esc(C(k)?.name || k)} ${v}`).join('　') || '无';
@@ -332,7 +347,7 @@ function vStock() {
     }
   }
   if (!hidden && !ui.q) rows += `<tr class="add"><td colspan="${ncol}"><div class="addrow"><input data-add="series" placeholder="＋ 新系列，输入名字回车"></div></td></tr>`;
-  const h1 = `<th class="c1" rowspan="2">产品</th><th class="n c2" rowspan="2">本仓</th><th class="n" rowspan="2" title="这个产品累计进了多少货">累计<br>进货</th><th class="n" rowspan="2" title="各渠道累计卖出：直营 + 代发 + 寄售店已结算的">累计<br>卖出</th>` + groupsCh.map(g => `<th class="gh ${g.t}" colspan="${cols.filter(c => c.g === g).length}" draggable="true" data-drag="g:${g.t}" data-drop="g:${g.t}" title="按住可以整组左右拖动"><button class="fold" data-act="gfold" data-id="${g.t}" title="${g.fold ? '展开' : '收起'}">${g.fold ? '＋' : '－'}</button> ${g.fold ? GSHORT[g.t] : g.l}</th>`).join('');
+  const h1 = `<th class="c1" rowspan="2">产品</th><th class="n c2" rowspan="2">本仓</th><th class="n" rowspan="2" title="这个产品累计进了多少货">累计<br>进货</th><th class="n" rowspan="2" title="各渠道累计卖出：直营 + 代发 + 寄售店已结算的">累计<br>卖出</th>` + groupsCh.map((g, gi) => `<th class="gh ${g.t}" colspan="${cols.filter(c => c.g === g).length}" draggable="true" data-drag="g:${g.t}" data-drop="g:${g.t}" title="按住可以整组左右拖动，或点 ‹ › 移动"><button class="fold" data-act="gfold" data-id="${g.t}" title="${g.fold ? '展开' : '收起'}">${g.fold ? '＋' : '－'}</button> ${g.fold ? GSHORT[g.t] : g.l}<span class="gmv"><button class="x mv" data-act="gmove" data-id="${g.t}" data-d="-1" title="整组往左移" ${gi === 0 ? 'disabled' : ''}>‹</button><button class="x mv" data-act="gmove" data-id="${g.t}" data-d="1" title="整组往右移" ${gi === groupsCh.length - 1 ? 'disabled' : ''}>›</button></span></th>`).join('');
   const h2 = cols.map(c => c.k === 'sum' ? `<th class="n r2 sub gl">${c.g.t === 'consign' ? '在店' : '合计'}</th>` : c.sub ? `<th class="n r2 sub" title="${c.c ? esc(c.c.name) + ' 退回给我们的数量' : '直营渠道的客人退货'}">${c.sub}</th>`
     : `<th class="n r2 ${c.c.type} ${c === cols.find(x => x.g === c.g) ? 'gl' : ''}" draggable="true" data-drag="${c.c.id}" data-drop="${c.c.id}" title="按住可以左右拖动排序"><span>${esc(c.c.name)}</span><button class="x eye" data-act="hidec" data-id="${c.c.id}" title="${hidden ? '恢复显示' : '隐藏这个渠道（数量保留）'}">${hidden ? EYE_OFF : EYE}</button></th>`).join('');
   return `<div class="tools">
@@ -342,7 +357,7 @@ function vStock() {
     <span class="addch"><input data-add="channel" placeholder="＋ 新渠道，输入名字回车"><select id="newch">${Object.entries(CH_TYPES).reverse().map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></span>
     <span class="tot">本仓 <b>${wh}</b>　寄售在店 <b>${out}</b>　累计进货 <b>${S.products.reduce((a, p) => a + m[p.id].in, 0)}</b>　累计卖出 <b>${S.products.reduce((a, p) => a + m[p.id].sold, 0)}</b>${costed ? `　库存金额 <b>${money(val)}</b>` : ''}</span></div>
   <div class="wrap grid"><table><thead><tr>${h1}</tr><tr>${h2}</tr></thead><tbody>${rows || `<tr><td colspan="${ncol}" class="empty">${hidden ? '没有隐藏的产品' : '没有符合的产品'}</td></tr>`}</tbody></table></div>
-  <p class="hint">点任意一格，按 ＋ － 或直接改数字，自动保存。每组渠道左上角的 － 可以收起成一列，整组和单个渠道都能按住拖动换位置。寄售店的格子是现在还在店里的数量。</p>`;
+  <p class="hint">点任意一格，按 ＋ － 或直接改数字，自动保存。渠道组：左上角 － 收起成一列，‹ › 整组左右移；单个渠道按住拖动换位置，小眼睛隐藏。品类：↑ ↓ 上下移（也能按住拖动），小眼睛隐藏整个品类。隐藏的都在「已隐藏」里，数量都保留。寄售店的格子是现在还在店里的数量。</p>`;
 }
 
 /* ---------- 流水 ---------- */
@@ -397,7 +412,7 @@ function vSettle() {
   const hrows = list.map(x => {
     if (x.kind === 'calib') {
       let r = `<tr class="hrow" data-act="sopen" data-id="${x.id}"><td>${ui.sopen[x.id] ? '－' : '＋'} ${x.manual ? '手动校准在店数量' : `在店数量校准（截至 ${esc(x.month)}）`}${x.manual && x.src ? `<span class="hint">　${esc(x.src)}</span>` : ''}</td><td class="n">${x.lines.length} 款有调整</td><td class="n"></td><td>${esc(x.date)} 登记 · ${esc(x.by)}</td><td><button class="sm" data-act="unsettle" data-id="${x.id}">撤销</button></td></tr>`;
-      if (ui.sopen[x.id]) r += `<tr class="det"><td colspan="5"><table class="lines"><thead><tr><th>产品</th><th class="n">校准前</th><th class="n">校准后</th><th class="n">调整</th></tr></thead><tbody>${x.lines.map(l => `<tr><td>${esc(pname(P(l.pid)))}</td><td class="n">${l.from}</td><td class="n">${l.to}</td><td class="n">${l.to - l.from > 0 ? '+' : ''}${l.to - l.from}</td></tr>`).join('')}</tbody></table><div>${x.manual ? '原因' : '依据'}：${esc(x.src)}。只改这家店的在店数量，不算卖出，本仓不变。</div></td></tr>`;
+      if (ui.sopen[x.id]) r += `<tr class="det"><td colspan="5"><table class="lines"><thead><tr><th>产品</th><th class="n">校准前</th><th class="n">校准后</th><th class="n">调整</th><th>差异去向</th></tr></thead><tbody>${x.lines.map(l => `<tr><td>${esc(pname(P(l.pid)))}</td><td class="n">${l.from}</td><td class="n">${l.to}</td><td class="n">${l.to - l.from > 0 ? '+' : ''}${l.to - l.from}</td><td>${l.how && CAL_HOW[l.how] ? esc(CAL_HOW[l.how].l) + '<span class="hint">（' + CAL_HOW[l.how].fx + '）</span>' : '<span class="hint">没写去向：只改了在店数量，本仓和卖出都没动</span>'}</td></tr>`).join('')}</tbody></table><div>${x.manual ? '原因' : '依据'}：${esc(x.src)}。</div></td></tr>`;
       return r;
     }
     const n = x.lines.reduce((a, l) => a + l.qty, 0), amt = Math.round(x.lines.reduce((a, l) => a + (l.price != null ? l.qty * l.price : 0), 0) * 100) / 100, noPrice = x.lines.some(l => l.price == null), nb = (x.backs || []).reduce((a, l) => a + l.qty, 0);
@@ -408,11 +423,11 @@ function vSettle() {
   }).join('');
   if (ui.scal) {
     const cps = S.products.filter(p => (m[p.id].ch[ui.sch] || 0) !== 0 || ui.scalAdd.includes(p.id));
-    const crow = cps.map(p => { const n = m[p.id].ch[ui.sch] || 0; return `<tr data-pid="${p.id}" data-have="${n}"><td class="nm" style="${swatch(p)}">${esc(pname(p))}</td><td class="n ${n < 0 ? 'neg' : ''}">${n}</td><td class="ed"><input class="num calin" type="number" min="0" inputmode="numeric" value="${Math.max(0, n)}"></td><td class="n caldiff">${n < 0 ? '+' + (-n) : ''}</td></tr>`; }).join('');
-    return `<p class="note">店里的实际数量和系统对不上时用：比如店铺那边有退货、补货没登记、盘点有出入。这里只改这家店的在店数量，不算卖出，也不动本仓；每次校准都留记录，可以撤销。</p>
+    const crow = cps.map(p => { const n = m[p.id].ch[ui.sch] || 0; return `<tr data-pid="${p.id}" data-have="${n}"><td class="nm" style="${swatch(p)}">${esc(pname(p))}</td><td class="n ${n < 0 ? 'neg' : ''}">${n}</td><td class="ed"><input class="num calin" type="number" min="0" inputmode="numeric" value="${Math.max(0, n)}"></td><td class="n caldiff">${n < 0 ? '+' + (-n) : ''}</td><td class="calhow">${calSelect(n < 0 ? -n : 0)}</td></tr>`; }).join('');
+    return `<p class="note">店里的实际数量和系统对不上时用。改好「实际在店」后，每一处差异都要选它<b>去了哪里 / 从哪里来</b>：<br>店里少了 → 退回本仓（本仓 +）、其实卖掉了（算卖出）、丢失 / 损坏 / 样品（记为损耗）；店里多了 → 发货漏登（本仓 −）、盘点多出（本仓不变）。每次校准都留记录，可以撤销。</p>
     ${shopBar}
-    <div class="wrap"><table class="settle"><thead><tr><th>产品</th><th class="n">系统里在店</th><th class="n">实际在店</th><th class="n">调整</th></tr></thead><tbody>${crow || '<tr><td colspan="4" class="empty">这家店现在没有记录</td></tr>'}
-    <tr class="add"><td colspan="4"><div class="addrow"><input id="caladd" list="plist3" placeholder="＋ 这家店还有别的产品，输入名字选一个"><datalist id="plist3">${S.products.filter(p => p.active !== false && !cps.includes(p)).map(x => `<option value="${esc(plabel(x))}">`).join('')}</datalist></div></td></tr></tbody></table></div>
+    <div class="wrap"><table class="settle"><thead><tr><th>产品</th><th class="n">系统里在店</th><th class="n">实际在店</th><th class="n">调整</th><th>差异去向</th></tr></thead><tbody>${crow || '<tr><td colspan="5" class="empty">这家店现在没有记录</td></tr>'}
+    <tr class="add"><td colspan="5"><div class="addrow"><input id="caladd" list="plist3" placeholder="＋ 这家店还有别的产品，输入名字选一个"><datalist id="plist3">${S.products.filter(p => p.active !== false && !cps.includes(p)).map(x => `<option value="${esc(plabel(x))}">`).join('')}</datalist></div></td></tr></tbody></table></div>
     <div class="tools"><label>原因 <input id="calwhy" placeholder="比如：店铺退货 2 件、月底盘点" style="width:280px"></label><label>登记日期 <input type="date" id="sdate" value="${today()}"></label><button class="primary" data-act="calsave">保存校准</button><button data-act="scal">取消</button><p class="msg" id="smsg"></p></div>
     ${hrows ? `<h3 class="sub" id="hist">${esc(ch.name)} 的对账记录（点开看明细）</h3><div class="wrap hist"><table><tbody>${hrows}${histTotal(ch.id)}</tbody></table></div>` : ''}`;
   }
@@ -727,6 +742,7 @@ function vChannels() {
 function vSettings() {
   if (CLOUD) return vCloud();
   return `<div class="cards">
+  <div><h3>程序版本</h3><p>${APP_VERSION}</p></div>
   <div><h3>数据保存在哪里</h3><p>现在是试用版，数据只存在这台电脑的这个浏览器里，Burke 那边看不到。上传到 GitHub 之后才会两人共用。试用期间建议改完就导出一份备份。</p></div>
   <div><h3>备份</h3><p>导出全部产品、渠道和流水为一个 JSON 文件；换电脑或出问题时可以导入恢复。</p><button data-act="export">导出备份</button> <button data-act="import">导入备份</button><input type="file" id="file" accept=".json,application/json" hidden></div>
   <div><h3>导出库存表</h3><p>当前库存导出成 CSV，可以用 Excel / Numbers 打开。</p><button data-act="csv">导出 CSV</button></div>
@@ -740,7 +756,7 @@ function vCloud() {
     : Cloud.missing ? '已连接，但仓库里还没有数据文件。请在下面上传初始数据。'
     : Cloud.loaded ? `已连接 <b>${esc(c.owner)}/${esc(c.repo)}</b>　·　${Cloud.dirty ? '有修改还没传上去' : '已同步'}${Cloud.last ? '　·　最后同步 ' + Cloud.last.toTimeString().slice(0, 5) : ''}` : '正在读取…';
   return `<div class="cards">
-  <div><h3>GitHub 同步</h3><p>${state}</p>
+  <div><h3>GitHub 同步</h3><p>${state}</p><p class="hint">程序版本 ${APP_VERSION}</p>
     ${Cloud.ready() ? `<button data-act="csync">立即同步</button> ${hist ? `<a class="btnlink" href="${hist}" target="_blank" rel="noopener">查看修改历史 ↗</a>` : ''}` : ''}</div>
   ${Cloud.missing ? `<div><h3>上传初始数据（只需要做一次）</h3><p>选择一个数据文件：本机版「设置 → 导出备份」得到的 .json，或者 Claude 给你的「初始数据」文件。上传后你和 Burke 都用这一份。</p><button class="primary" data-act="cseed">选择文件并上传</button><input type="file" id="seedfile" accept=".json,application/json" hidden><p class="msg" id="seedmsg"></p></div>` : ''}
   <div><h3>连接设置</h3>
@@ -779,7 +795,7 @@ const editing = () => !!(ui.act || ($('#dlg') && $('#dlg').open) || (document.ac
 let pullAt = 0;
 async function cloudPull(force) {
   if (!CLOUD || !Cloud.ready() || Cloud.busy) { syncStatus(); return; }
-  if (!force && (editing() || Date.now() - pullAt < 20000)) return;
+  if (!force && Date.now() - pullAt < 15000) return;
   pullAt = Date.now();
   try {
     const r = await Cloud.get(); Cloud.err = '';
@@ -924,6 +940,9 @@ document.addEventListener('click', e => {
   else if (a === 'cat') { ui.cat = b.dataset.v; render(); }
   else if (a === 'gen') { ui.gen = ui.gen === id ? null : id; ui.open[id] = true; render(); genPreview(); }
   else if (a === 'genok') { const code = genCode(); if (!code) { $('#ghint').textContent = '系列、品类、颜色、序号都要选。'; return; } const p = P(id), cat = (SKU_CAT.find(x => x[0] === $('#gcat').value) || [])[2]; p.sku = code; delete p.color; if (!p.cat && cat) p.cat = cat; ui.gen = null; save(); render(); }
+  else if (a === 'hides') { const v = viewState(), k = b.dataset.k; v.hideSeries = v.hideSeries.includes(k) ? v.hideSeries.filter(x => x !== k) : v.hideSeries.concat(k); if (!v.hideSeries.length && ui.show === 'hidden' && !S.products.some(p => p.active === false) && !S.channels.some(c => c.active === false)) ui.show = 'all'; save(); render(); }
+  else if (a === 'smove') { const k = b.dataset.k, d = Number(b.dataset.d), hs = new Set(viewState().hideSeries), order = [...new Set(S.products.filter(p => p.active !== false && !hs.has(p.series) && (!ui.cat || p.cat === ui.cat)).map(p => p.series))], i = order.indexOf(k), t = order[i + d]; if (t != null) { moveSeries(k, t, d > 0); render(); } }
+  else if (a === 'gmove') { const vis = gridCols().filter(g => g.chs.length).map(g => g.t), i = vis.indexOf(id), t = vis[i + Number(b.dataset.d)]; if (t) { moveGroup(id, t, Number(b.dataset.d) > 0); render(); } }
   else if (a === 'hidep') { const p = P(id); p.active = p.active === false; save(); render(); }
   else if (a === 'hidec') { const c = C(id); c.active = c.active === false; save(); render(); }
   else if (a === 'chup' || a === 'chdown') {
@@ -953,7 +972,10 @@ document.addEventListener('click', e => {
     });
     if (bad) { msg.textContent = '标红的格子请填 0 或正整数。'; return; }
     if (!lines.length) { msg.textContent = '数量都没变，不需要保存。'; return; }
-    for (const l of lines) S.tx.push({ id: uid(), date, pid: l.pid, type: 'adj', ch, qty: l.to - l.from, by: user, note: '手动校准在店数量', sid });
+    let miss = false;
+    for (const l of lines) { const tr = document.querySelector(`#view tr[data-pid="${l.pid}"]`), sel = tr.querySelector('.calsel'); l.how = sel ? sel.value : ''; if (!l.how || (CAL_HOW[l.how].dir < 0) !== (l.to < l.from)) { miss = true; if (sel) sel.classList.add('bad'); } }
+    if (miss) { msg.textContent = '标红的差异请选一个去向。'; return; }
+    for (const l of lines) { const d = Math.abs(l.to - l.from), h = CAL_HOW[l.how]; S.tx.push({ id: uid(), date, pid: l.pid, type: h.type, ch, qty: h.type === 'adj' ? l.to - l.from : d, by: user, note: '校准：' + h.l, sid }); }
     S.settles = S.settles || []; S.settles.push({ id: sid, ch, kind: 'calib', manual: true, month: date.slice(0, 7), date, by: user, src: $('#calwhy').value.trim() || '手动校准', lines });
     ui.scal = false; ui.scalAdd = []; ui.sopen[sid] = true; save(); render();
     if ($('#smsg')) $('#smsg').classList.add('ok'), $('#smsg').textContent = `已校准 ${lines.length} 款，记录在下面。`;
@@ -1020,7 +1042,10 @@ document.addEventListener('input', e => {
   if (t.id === 'q') { ui.q = t.value; render(true); }
   else if (t.id === 'lq') { ui.lq = t.value; render(true); }
   else if (t.id === 'pq') { ui.pq = t.value; render(true); }
-  else if (t.classList.contains('calin')) { const tr = t.closest('tr'), d = Number(t.value) - Number(tr.dataset.have); tr.querySelector('.caldiff').textContent = t.value === '' || !d ? '' : (d > 0 ? '+' : '') + d; t.classList.remove('bad'); }
+  else if (t.classList.contains('calin')) { const tr = t.closest('tr'), d = Number(t.value) - Number(tr.dataset.have); tr.querySelector('.caldiff').textContent = t.value === '' || !d ? '' : (d > 0 ? '+' : '') + d; t.classList.remove('bad');
+    const old = tr.querySelector('.calsel'), keep = old && old.value && CAL_HOW[old.value] && Math.sign(d) === CAL_HOW[old.value].dir ? old.value : '';
+    tr.querySelector('.calhow').innerHTML = calSelect(t.value === '' ? 0 : d); if (keep) tr.querySelector('.calsel').value = keep; }
+  else if (t.classList.contains('calsel')) t.classList.remove('bad');
   else if (t.classList.contains('leftin')) {   // 直接改「对账后还在店」，卖出数跟着算
     const tr = t.closest('tr'), have = Number(tr.dataset.have), v = parseInt(t.value, 10), ok = !isNaN(v) && v >= 0 && v <= have;
     t.classList.toggle('bad', !ok && t.value !== ''); if (ok) tr.querySelector('.sold').value = have - v || ''; settleSum();
@@ -1031,7 +1056,7 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   const t = e.target;
   if (['gser', 'gcat', 'gcol', 'gnum'].includes(t.id)) { if (t.id !== 'gnum') $('#gnum').value = t.id === 'gcol' && $('#gnum').value ? $('#gnum').value : ''; genPreview(); return; }
-  if (t.id === 'caladd') { const p = findProduct(t.value); if (p) { const keep = {}; document.querySelectorAll('#view tr[data-pid]').forEach(tr => { keep[tr.dataset.pid] = tr.querySelector('.calin').value; }); ui.scalAdd.push(p.id); render(); for (const [k, v] of Object.entries(keep)) { const i = $(`#view tr[data-pid="${k}"] .calin`); if (i) { i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); } } } }
+  if (t.id === 'caladd') { const p = findProduct(t.value); if (p) { const keep = {}; document.querySelectorAll('#view tr[data-pid]').forEach(tr => { keep[tr.dataset.pid] = [tr.querySelector('.calin').value, (tr.querySelector('.calsel') || {}).value]; }); ui.scalAdd.push(p.id); render(); for (const [k, [v, h]] of Object.entries(keep)) { const i = $(`#view tr[data-pid="${k}"] .calin`); if (i) { i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); const se = $(`#view tr[data-pid="${k}"] .calsel`); if (se && h && [...se.options].some(o => o.value === h)) se.value = h; } } } }
   else if (t.id === 'smi') { ui.simp.mi = Number(t.value); render(); }
   else if (t.id === 'sfile') {
     const f = t.files[0]; if (!f) return;
@@ -1133,7 +1158,8 @@ if (CLOUD) {
   document.title = 'FORPHOR 库存';
   syncStatus();
   if (!Cloud.ready() && !location.hash) location.hash = '#settings';
-  setInterval(() => { if (document.visibilityState === 'visible') cloudPull(); }, 45000);
+  setInterval(() => { if (document.visibilityState === 'visible') cloudPull(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') cloudPull(); });
   window.addEventListener('focus', () => cloudPull());
   document.addEventListener('focusout', () => setTimeout(() => { if (Cloud.pending && !editing()) { Cloud.pending = false; render(true); } }, 300));
   window.addEventListener('beforeunload', e => { if (Cloud.dirty || Cloud.busy) { e.preventDefault(); e.returnValue = ''; } });
